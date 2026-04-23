@@ -26,6 +26,7 @@ import {
 
 export default function FitnessTrackerApp() {
   const [currentUser, setCurrentUser] = useState(null);
+  const [token, setToken] = useState(localStorage.getItem('token') || null);
   const [activeTab, setActiveTab] = useState("dashboard");
   const [showMenu, setShowMenu] = useState(false);
   const [loginForm, setLoginForm] = useState({ email: "", password: "" });
@@ -81,44 +82,40 @@ export default function FitnessTrackerApp() {
     date: new Date().toISOString().split("T")[0],
   });
 
-  // Load data from storage
+  // Load data from API
   useEffect(() => {
     const loadData = async () => {
-      if (!currentUser) return;
+      if (!currentUser || !token) return;
+
+      const headers = { 'Authorization': `Bearer ${token}` };
 
       try {
-        const workoutsData = await window.storage.get(
-          `workouts_${currentUser.email}`,
-        );
-        const mealsData = await window.storage.get(
-          `meals_${currentUser.email}`,
-        );
-        const sleepData = await window.storage.get(
-          `sleep_${currentUser.email}`,
-        );
-        const heartData = await window.storage.get(
-          `heart_${currentUser.email}`,
-        );
-        const activitiesData = await window.storage.get(
-          `activities_${currentUser.email}`,
-        );
-        const notifData = await window.storage.get(
-          `notifications_${currentUser.email}`,
-        );
+        const [workoutsRes, mealsRes, sleepRes, heartRes, actRes] = await Promise.all([
+          fetch('/api/workouts', { headers }),
+          fetch('/api/meals', { headers }),
+          fetch('/api/sleep', { headers }),
+          fetch('/api/heart-rates', { headers }),
+          fetch('/api/activities', { headers })
+        ]);
 
-        if (workoutsData) setWorkouts(JSON.parse(workoutsData.value));
-        if (mealsData) setMeals(JSON.parse(mealsData.value));
-        if (sleepData) setSleepLogs(JSON.parse(sleepData.value));
-        if (heartData) setHeartRates(JSON.parse(heartData.value));
-        if (activitiesData) setActivities(JSON.parse(activitiesData.value));
-        if (notifData) setNotifications(JSON.parse(notifData.value));
+        if (workoutsRes.ok) setWorkouts(await workoutsRes.json());
+        if (mealsRes.ok) setMeals(await mealsRes.json());
+        if (sleepRes.ok) setSleepLogs(await sleepRes.json());
+        if (heartRes.ok) setHeartRates(await heartRes.json());
+        if (actRes.ok) setActivities(await actRes.json());
+        
+        // Notifications can still be local for simplicity or loaded if we add an endpoint for it. We'll leave them empty initially.
       } catch (error) {
-        console.log("Loading data...", error);
+        console.error("Loading data error:", error);
       }
     };
 
+    if (token && !currentUser) {
+      // Typically we'd fetch the user profile here, but for now we expect login/signup to set the user
+    }
+
     loadData();
-  }, [currentUser]);
+  }, [currentUser, token]);
 
   // Check daily reminders
   useEffect(() => {
@@ -154,10 +151,7 @@ export default function FitnessTrackerApp() {
       if (newNotifs.length > 0 && notifications.length < 5) {
         const updated = [...newNotifs, ...notifications].slice(0, 5);
         setNotifications(updated);
-        window.storage.set(
-          `notifications_${currentUser.email}`,
-          JSON.stringify(updated),
-        );
+        localStorage.setItem(`notifications_${currentUser.email}`, JSON.stringify(updated));
       }
     };
 
@@ -175,20 +169,23 @@ export default function FitnessTrackerApp() {
     }
 
     try {
-      const userData = await window.storage.get(`user_${loginForm.email}`);
-      if (userData) {
-        const user = JSON.parse(userData.value);
-        if (user.password === loginForm.password) {
-          setCurrentUser(user);
-          setLoginForm({ email: "", password: "" });
-        } else {
-          alert("Invalid credentials");
-        }
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(loginForm)
+      });
+      const data = await response.json();
+      
+      if (response.ok) {
+        setCurrentUser(data.user);
+        setToken(data.token);
+        localStorage.setItem('token', data.token);
+        setLoginForm({ email: "", password: "" });
       } else {
-        alert("User not found");
+        alert(data.error || "Invalid credentials");
       }
     } catch (error) {
-      alert("User not found");
+      alert("Connection error");
     }
   };
 
@@ -199,35 +196,38 @@ export default function FitnessTrackerApp() {
     }
 
     const newUser = {
-      name: signupForm.name,
-      email: signupForm.email,
-      password: signupForm.password,
-      age: signupForm.age,
-      weight: signupForm.weight,
-      height: signupForm.height,
-      goal: signupForm.goal,
+      ...signupForm,
       createdAt: new Date().toISOString(),
     };
 
-    await window.storage.set(
-      `user_${signupForm.email}`,
-      JSON.stringify(newUser),
-    );
-    setCurrentUser(newUser);
-    setSignupForm({
-      name: "",
-      email: "",
-      password: "",
-      age: "",
-      weight: "",
-      height: "",
-      goal: "fitness",
-    });
-    setIsSignup(false);
+    try {
+      const response = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newUser)
+      });
+      const data = await response.json();
+      
+      if (response.ok) {
+        setCurrentUser(data.user);
+        setToken(data.token);
+        localStorage.setItem('token', data.token);
+        setSignupForm({
+          name: "", email: "", password: "", age: "", weight: "", height: "", goal: "fitness",
+        });
+        setIsSignup(false);
+      } else {
+        alert(data.error || "Signup failed");
+      }
+    } catch (error) {
+      alert("Connection error");
+    }
   };
 
   const handleLogout = () => {
     setCurrentUser(null);
+    setToken(null);
+    localStorage.removeItem('token');
     setActiveTab("dashboard");
   };
 
@@ -239,29 +239,37 @@ export default function FitnessTrackerApp() {
     }
 
     const workout = {
-      id: Date.now(),
       ...newWorkout,
       createdAt: new Date().toISOString(),
     };
 
-    const updatedWorkouts = [...workouts, workout];
-    setWorkouts(updatedWorkouts);
-    await window.storage.set(
-      `workouts_${currentUser.email}`,
-      JSON.stringify(updatedWorkouts),
-    );
+    try {
+      const res = await fetch('/api/workouts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(workout)
+      });
+      if (res.ok) {
+        const savedWorkout = await res.json();
+        setWorkouts([savedWorkout, ...workouts]);
 
-    const activity = {
-      type: "workout",
-      description: `Completed ${newWorkout.type} - ${newWorkout.exercise}`,
-      time: new Date().toISOString(),
-    };
-    const updatedActivities = [activity, ...activities].slice(0, 50);
-    setActivities(updatedActivities);
-    await window.storage.set(
-      `activities_${currentUser.email}`,
-      JSON.stringify(updatedActivities),
-    );
+        // Log activity
+        const activity = {
+          type: "workout",
+          description: `Completed ${newWorkout.type} - ${newWorkout.exercise}`,
+          time: new Date().toISOString(),
+        };
+        const actRes = await fetch('/api/activities', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify(activity)
+        });
+        if (actRes.ok) {
+          const savedActivity = await actRes.json();
+          setActivities([savedActivity, ...activities].slice(0, 50));
+        }
+      }
+    } catch(err) { console.error('Error saving workout', err); }
 
     setNewWorkout({
       type: "",
@@ -283,29 +291,37 @@ export default function FitnessTrackerApp() {
     }
 
     const meal = {
-      id: Date.now(),
       ...newMeal,
       createdAt: new Date().toISOString(),
     };
 
-    const updatedMeals = [...meals, meal];
-    setMeals(updatedMeals);
-    await window.storage.set(
-      `meals_${currentUser.email}`,
-      JSON.stringify(updatedMeals),
-    );
+    try {
+      const res = await fetch('/api/meals', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(meal)
+      });
+      if (res.ok) {
+        const savedMeal = await res.json();
+        setMeals([savedMeal, ...meals]);
 
-    const activity = {
-      type: "meal",
-      description: `Logged ${newMeal.type}: ${newMeal.name}`,
-      time: new Date().toISOString(),
-    };
-    const updatedActivities = [activity, ...activities].slice(0, 50);
-    setActivities(updatedActivities);
-    await window.storage.set(
-      `activities_${currentUser.email}`,
-      JSON.stringify(updatedActivities),
-    );
+        // Log activity
+        const activity = {
+          type: "meal",
+          description: `Logged ${newMeal.type}: ${newMeal.name}`,
+          time: new Date().toISOString(),
+        };
+        const actRes = await fetch('/api/activities', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify(activity)
+        });
+        if (actRes.ok) {
+          const savedActivity = await actRes.json();
+          setActivities([savedActivity, ...activities].slice(0, 50));
+        }
+      }
+    } catch(err) { console.error('Error saving meal', err); }
 
     setNewMeal({
       name: "",
@@ -326,29 +342,37 @@ export default function FitnessTrackerApp() {
     }
 
     const sleep = {
-      id: Date.now(),
       ...newSleep,
       createdAt: new Date().toISOString(),
     };
 
-    const updatedSleep = [...sleepLogs, sleep];
-    setSleepLogs(updatedSleep);
-    await window.storage.set(
-      `sleep_${currentUser.email}`,
-      JSON.stringify(updatedSleep),
-    );
+    try {
+      const res = await fetch('/api/sleep', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(sleep)
+      });
+      if (res.ok) {
+        const savedSleep = await res.json();
+        setSleepLogs([savedSleep, ...sleepLogs]);
 
-    const activity = {
-      type: "sleep",
-      description: `Logged ${newSleep.hours} hours of ${newSleep.quality} sleep`,
-      time: new Date().toISOString(),
-    };
-    const updatedActivities = [activity, ...activities].slice(0, 50);
-    setActivities(updatedActivities);
-    await window.storage.set(
-      `activities_${currentUser.email}`,
-      JSON.stringify(updatedActivities),
-    );
+        // Log activity
+        const activity = {
+          type: "sleep",
+          description: `Logged ${newSleep.hours} hours of ${newSleep.quality} sleep`,
+          time: new Date().toISOString(),
+        };
+        const actRes = await fetch('/api/activities', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify(activity)
+        });
+        if (actRes.ok) {
+          const savedActivity = await actRes.json();
+          setActivities([savedActivity, ...activities].slice(0, 50));
+        }
+      }
+    } catch(err) { console.error('Error saving sleep', err); }
 
     setNewSleep({
       hours: "",
@@ -367,29 +391,36 @@ export default function FitnessTrackerApp() {
     }
 
     const heart = {
-      id: Date.now(),
       ...newHeartRate,
       createdAt: new Date().toISOString(),
     };
 
-    const updatedHeart = [...heartRates, heart];
-    setHeartRates(updatedHeart);
-    await window.storage.set(
-      `heart_${currentUser.email}`,
-      JSON.stringify(updatedHeart),
-    );
+    try {
+      const res = await fetch('/api/heart-rates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify(heart)
+      });
+      if (res.ok) {
+        const savedHeartRate = await res.json();
+        setHeartRates([savedHeartRate, ...heartRates]);
 
-    const activity = {
-      type: "heart",
-      description: `Recorded ${newHeartRate.type} heart rate: ${newHeartRate.rate} bpm`,
-      time: new Date().toISOString(),
-    };
-    const updatedActivities = [activity, ...activities].slice(0, 50);
-    setActivities(updatedActivities);
-    await window.storage.set(
-      `activities_${currentUser.email}`,
-      JSON.stringify(updatedActivities),
-    );
+        const activity = {
+          type: "heart",
+          description: `Recorded ${newHeartRate.type} heart rate: ${newHeartRate.rate} bpm`,
+          time: new Date().toISOString(),
+        };
+        const actRes = await fetch('/api/activities', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+          body: JSON.stringify(activity)
+        });
+        if (actRes.ok) {
+          const savedActivity = await actRes.json();
+          setActivities([savedActivity, ...activities].slice(0, 50));
+        }
+      }
+    } catch(err) { console.error('Error saving heart rate', err); }
 
     setNewHeartRate({
       rate: "",
