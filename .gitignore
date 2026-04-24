@@ -11,6 +11,14 @@ node_modules
 dist
 dist-ssr
 *.local
+.env
+.env.*
+!.env.example
+
+# Backend files
+fitness-backend/node_modules
+fitness-backend/fitness.db
+fitness-backend/.env
 
 # Editor directories and files
 .vscode/*

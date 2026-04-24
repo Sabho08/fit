@@ -1,0 +1,6 @@
+# Ignore the backend folder during Vercel UI build
+fitness-backend/
+node_modules/
+dist/
+.env
+.env.*

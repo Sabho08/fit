@@ -1,3 +1,4 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcrypt');
@@ -6,7 +7,7 @@ const db = require('./database');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const JWT_SECRET = 'fitness-super-secret-key-123';
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret-key';
 
 app.use(cors());
 app.use(express.json());
